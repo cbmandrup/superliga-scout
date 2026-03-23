@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Data (raw scraped files — too large for GitHub)
+data/raw/
+data/models/
+
+# Keep processed DB only if small; comment out if using real data
+# data/processed/scouting.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reports (generated)
+reports/*.pdf
+
+# Secrets
+.streamlit/secrets.toml
