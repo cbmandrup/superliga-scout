@@ -350,6 +350,12 @@ def display_player_detail(
     est_val   = int(pred_row.get("estimated_market_value_eur", 0))
     cluster_sr = float(pred_row.get("cluster_historical_success", 0.65))
     shap_feat  = pred_row.get("top_shap_features", [])
+    if isinstance(shap_feat, str):
+        import ast
+        try:
+            shap_feat = ast.literal_eval(shap_feat)
+        except Exception:
+            shap_feat = []
 
     st.markdown(f"## {player_name}")
     st.markdown(f"**League:** {league} &nbsp;|&nbsp; **Age:** {age} &nbsp;|&nbsp; **Style:** {style_lbl}")
