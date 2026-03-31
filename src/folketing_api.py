@@ -90,10 +90,13 @@ def get_meetings(periode_id: Optional[int] = None, max_records: int = 2000) -> p
 
 
 def get_votes(periode_id: Optional[int] = None, max_records: int = 5000) -> pd.DataFrame:
-    """Return votes (Afstemning), optionally filtered by parliamentary period."""
+    """Return votes (Afstemning), optionally filtered by parliamentary period.
+
+    The ODA API is OData v3. Vote results are in the 'konklusion' field
+    (string: "Vedtaget" / "Forkastet") and optionally a boolean 'vedtaget'.
+    """
     params: dict = {"$orderby": "id desc"}
     if periode_id is not None:
-        # Join via Møde to filter by period
         params["$filter"] = f"m%C3%B8de/periode_id eq {periode_id}"
         params["$expand"] = "m%C3%B8de"
     records = _paginate("Afstemning", params, max_records=max_records)
@@ -104,7 +107,10 @@ def get_votes(periode_id: Optional[int] = None, max_records: int = 5000) -> pd.D
     if "møde" in df.columns:
         moed_df = df["møde"].apply(pd.Series).add_prefix("møde_")
         df = pd.concat([df.drop(columns=["møde"]), moed_df], axis=1)
-    if "vedtaget" in df.columns:
+    # Normalise result field — API may return 'konklusion' (string) or 'vedtaget' (bool)
+    if "konklusion" in df.columns:
+        df["vedtaget"] = df["konklusion"].str.strip().str.lower() == "vedtaget"
+    elif "vedtaget" in df.columns:
         df["vedtaget"] = df["vedtaget"].astype(bool)
     return df
 

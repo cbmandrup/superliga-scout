@@ -226,20 +226,6 @@ with tab1:
     # KPI row
     col1, col2, col3, col4 = st.columns(4)
 
-    def kpi(col, label: str, value: int | str, extra_class: str = "") -> None:
-        col.markdown(
-            f"""
-            <div class="kpi-card {extra_class}">
-                <div class="label">{label}</div>
-                <div class="value">{value:,}" if isinstance(value, int) else f"{value}</div>
-            </div>
-            """.replace(
-                f'"{value:,}" if isinstance(value, int) else f"{value}"',
-                f"{value:,}" if isinstance(value, int) else str(value),
-            ),
-            unsafe_allow_html=True,
-        )
-
     col1.markdown(
         f'<div class="kpi-card"><div class="label">Antal møder</div>'
         f'<div class="value">{len(meetings_df):,}</div></div>',
@@ -401,11 +387,14 @@ with tab3:
         elif result_filter == "Forkastet" and "vedtaget" in filtered_votes.columns:
             filtered_votes = filtered_votes[filtered_votes["vedtaget"] == False]
 
-        # Display columns
+        # Display columns — prefer konklusion (raw string) for display, fall back to vedtaget bool
         vote_show_cols = []
-        for c in ["nummer", "forslag_kortttitel", "vedtaget", "ja", "nej", "hverken", "type"]:
+        for c in ["nummer", "konklusion", "forslag_kortttitel", "vedtaget", "ja", "nej", "hverken", "type"]:
             if c in filtered_votes.columns:
                 vote_show_cols.append(c)
+        # Don't show both konklusion and vedtaget — prefer konklusion
+        if "konklusion" in vote_show_cols and "vedtaget" in vote_show_cols:
+            vote_show_cols.remove("vedtaget")
 
         display_votes = filtered_votes[vote_show_cols].copy() if vote_show_cols else filtered_votes.copy()
 
@@ -416,6 +405,7 @@ with tab3:
 
         col_labels_v = {
             "nummer": "Nr.",
+            "konklusion": "Resultat",
             "forslag_kortttitel": "Forslag",
             "vedtaget": "Resultat",
             "ja": "Ja",
