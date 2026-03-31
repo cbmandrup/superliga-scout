@@ -23,6 +23,8 @@ from src.folketing_api import (
     build_politician_scoreboard,
     get_meetings_by_month,
     get_votes_by_month,
+    get_politician_vote_history,
+    compute_cross_party_similarity,
     FOLKETING_ANNUAL_SALARY_DKK,
 )
 from folketing_demo import get_demo_data
@@ -263,8 +265,8 @@ with st.spinner("Henter data..." if not IS_DEMO else "Indlæser demo-data..."):
 vote_summary = get_vote_summary(votes_df)
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Overblik", "Møder", "Afstemninger", "Scoreboard"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["Overblik", "Møder", "Afstemninger", "Scoreboard", "Politiker", "Tværparti"]
 )
 
 
@@ -583,6 +585,141 @@ with tab4:
             for bar in bars:
                 w = bar.get_width()
                 ax.text(w + 1, bar.get_y() + bar.get_height() / 2, f"{int(w):,}", va="center", fontsize=8)
+            plt.tight_layout()
+            st.pyplot(fig)  # scoreboard top10
+            plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — POLITIKER-PROFIL
+# ══════════════════════════════════════════════════════════════════════════════
+with tab5:
+    st.markdown('<div class="section-title">Politiker-profil</div>', unsafe_allow_html=True)
+
+    with st.spinner("Henter politikerdata..."):
+        actors_df_t5 = load_actors()
+        iv_df_t5 = load_individual_votes(selected_periode_id)
+
+    if actors_df_t5.empty:
+        st.info("Ingen politikerdata tilgængelig.")
+    else:
+        name_to_id = {
+            f"{row['navn']} ({row.get('gruppenavnkort', '?')})": row["id"]
+            for _, row in actors_df_t5.sort_values("navn").iterrows()
+            if pd.notna(row.get("navn"))
+        }
+
+        selected_pol_label = st.selectbox("Vælg politiker", list(name_to_id.keys()), index=0)
+        selected_pol_id = name_to_id[selected_pol_label]
+
+        history = get_politician_vote_history(selected_pol_id, iv_df_t5, votes_df)
+
+        if history.empty:
+            st.info("Ingen stemmehistorik fundet for denne politiker.")
+        else:
+            total = len(history)
+            ja_pct = round(100 * (history["politiker_stemme"] == "Ja").sum() / total)
+            nej_pct = round(100 * (history["politiker_stemme"] == "Nej").sum() / total)
+            hverken_pct = 100 - ja_pct - nej_pct
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Stemmer i alt", f"{total:,}")
+            m2.metric("Ja", f"{ja_pct}%")
+            m3.metric("Nej", f"{nej_pct}%")
+            m4.metric("Hverken", f"{hverken_pct}%")
+
+            # Donut chart
+            fig, ax = plt.subplots(figsize=(3.5, 3.5))
+            sizes = [ja_pct, nej_pct, hverken_pct]
+            colors = [TEAL, "#C0392B", "#BDC3C7"]
+            wedges, _ = ax.pie(sizes, colors=colors, startangle=90, wedgeprops={"width": 0.55})
+            ax.legend(wedges, [f"Ja {ja_pct}%", f"Nej {nej_pct}%", f"Hverken {hverken_pct}%"],
+                      loc="lower center", ncol=3, fontsize=8, frameon=False)
+            ax.set_title("Stemmefordeling", fontsize=10, pad=8)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+
+            # Filter + table
+            vote_filter = st.selectbox(
+                "Vis kun", ["Alle stemmer", "Kun Ja", "Kun Nej", "Kun Hverken"],
+                index=0, key="pol_vote_filter",
+            )
+            disp = history.copy()
+            col_rename = {
+                "politiker_stemme": "Min stemme", "forslag": "Forslag",
+                "resultat": "Resultat", "dato": "Dato", "type": "Type",
+            }
+            disp = disp.rename(columns={k: v for k, v in col_rename.items() if k in disp.columns})
+            if "Dato" in disp.columns:
+                disp["Dato"] = pd.to_datetime(disp["Dato"], errors="coerce").dt.strftime("%d-%m-%Y")
+            if vote_filter != "Alle stemmer" and "Min stemme" in disp.columns:
+                disp = disp[disp["Min stemme"] == vote_filter.replace("Kun ", "")]
+
+            st.markdown(f"**{len(disp):,} stemmer vist**")
+            st.dataframe(disp, use_container_width=True, hide_index=True, height=450)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — TVÆRPARTI ANALYSE
+# ══════════════════════════════════════════════════════════════════════════════
+with tab6:
+    st.markdown('<div class="section-title">Tværparti — Hvem stemmer ens på tværs af partilinjer?</div>', unsafe_allow_html=True)
+    st.markdown(
+        "Finder politikerpar fra **forskellige partier** der stemmer mest ens. "
+        "Lighed beregnes med cosinus-lighed på alle afstemninger (Ja=+1, Nej=−1, Hverken=0)."
+    )
+
+    with st.spinner("Beregner lighedsmatrix..."):
+        actors_df_t6 = load_actors()
+        iv_df_t6 = load_individual_votes(selected_periode_id)
+        similarity_df = compute_cross_party_similarity(iv_df_t6, actors_df_t6, top_n=50)
+
+    if similarity_df.empty:
+        st.info("Ikke nok data til at beregne tværpartilig lighed.")
+    else:
+        all_parties_t6 = sorted(set(similarity_df["parti_a"].tolist() + similarity_df["parti_b"].tolist()))
+        filter_parti = st.multiselect(
+            "Filtrer på parti",
+            options=all_parties_t6,
+            default=[],
+            placeholder="Alle partier",
+            key="xparty_filter",
+        )
+
+        disp_sim = similarity_df.copy()
+        if filter_parti:
+            disp_sim = disp_sim[
+                disp_sim["parti_a"].isin(filter_parti) | disp_sim["parti_b"].isin(filter_parti)
+            ]
+
+        disp_sim["lighed"] = disp_sim["lighed"].apply(lambda x: f"{x:.1%}")
+        disp_sim = disp_sim.rename(columns={
+            "navn_a": "Politiker A", "parti_a": "Parti A",
+            "navn_b": "Politiker B", "parti_b": "Parti B",
+            "lighed": "Lighed",
+        })
+        disp_sim.index += 1
+
+        st.markdown(f"**{len(disp_sim):,} par vist**")
+        st.dataframe(disp_sim, use_container_width=True, height=450)
+
+        # Bar chart top 15
+        st.markdown('<div class="section-title">Top 15 mest ens par på tværs af partier</div>', unsafe_allow_html=True)
+        top15 = similarity_df.head(15).copy()
+        if not top15.empty:
+            top15["par"] = (
+                top15["navn_a"] + " (" + top15["parti_a"] + ")\nvs\n"
+                + top15["navn_b"] + " (" + top15["parti_b"] + ")"
+            )
+            fig, ax = plt.subplots(figsize=(9, 6))
+            bars = ax.barh(top15["par"][::-1], top15["lighed"][::-1], color=TEAL)
+            ax.set_xlabel("Cosinus-lighed")
+            ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
+            ax.spines[["top", "right"]].set_visible(False)
+            for bar in bars:
+                w = bar.get_width()
+                ax.text(w + 0.002, bar.get_y() + bar.get_height() / 2, f"{w:.1%}", va="center", fontsize=7)
             plt.tight_layout()
             st.pyplot(fig)
             plt.close(fig)

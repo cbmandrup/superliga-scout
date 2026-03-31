@@ -12,6 +12,7 @@ import time
 from functools import lru_cache
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import requests
 from loguru import logger
@@ -222,6 +223,126 @@ def build_politician_scoreboard(
     scoreboard.index += 1  # 1-based rank
 
     return scoreboard[["navn", "parti", "antal_stemmer", "arbejdsdage", "løn_per_dag"]]
+
+
+_VOTE_TYPE_LABELS = {1: "Ja", 2: "Nej", 3: "Hverken"}
+
+
+def get_politician_vote_history(
+    aktør_id: int,
+    individual_votes_df: pd.DataFrame,
+    votes_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Return a politician's full vote history merged with proposal details.
+
+    Columns returned: forslag, konklusion, politiker_stemme, dato, type
+    """
+    if individual_votes_df.empty or votes_df.empty:
+        return pd.DataFrame()
+
+    # Filter to this politician
+    pol = individual_votes_df[individual_votes_df["aktør_id"] == aktør_id].copy()
+    if pol.empty:
+        return pd.DataFrame()
+
+    pol["politiker_stemme"] = pol["typeid"].map(_VOTE_TYPE_LABELS).fillna("Ukendt")
+
+    # Merge with vote details
+    vote_cols = ["id"]
+    for c in ["forslag_kortttitel", "konklusion", "vedtaget", "møde_dato", "type", "ja", "nej", "hverken"]:
+        if c in votes_df.columns:
+            vote_cols.append(c)
+    merged = pol.merge(
+        votes_df[vote_cols].rename(columns={"id": "afstemning_id"}),
+        on="afstemning_id",
+        how="left",
+    )
+
+    # Keep useful columns
+    keep = ["politiker_stemme"]
+    for c in ["forslag_kortttitel", "konklusion", "møde_dato", "type", "ja", "nej", "hverken"]:
+        if c in merged.columns:
+            keep.append(c)
+    result = merged[keep].rename(columns={
+        "forslag_kortttitel": "forslag",
+        "konklusion": "resultat",
+        "møde_dato": "dato",
+    })
+    if "dato" in result.columns:
+        result = result.sort_values("dato", ascending=False)
+    return result.reset_index(drop=True)
+
+
+def compute_cross_party_similarity(
+    individual_votes_df: pd.DataFrame,
+    actors_df: pd.DataFrame,
+    top_n: int = 30,
+    min_common_votes: int = 20,
+) -> pd.DataFrame:
+    """
+    Find politician pairs from different parties who vote most similarly.
+
+    Uses cosine similarity on a politician × afstemning vote matrix
+    (1 = Ja, -1 = Nej, 0 = Hverken/absent).
+
+    Returns the top_n most similar cross-party pairs.
+    """
+    if individual_votes_df.empty or actors_df.empty:
+        return pd.DataFrame()
+
+    # Build vote matrix
+    iv = individual_votes_df[["aktør_id", "afstemning_id", "typeid"]].copy()
+    iv["score"] = iv["typeid"].map({1: 1, 2: -1, 3: 0}).fillna(0)
+
+    matrix = iv.pivot_table(
+        index="aktør_id", columns="afstemning_id", values="score", fill_value=0
+    )
+
+    # Drop politicians with very few votes
+    matrix = matrix[matrix.abs().sum(axis=1) > min_common_votes]
+
+    actors_map = actors_df.set_index("id")[["navn", "gruppenavnkort"]].rename(
+        columns={"gruppenavnkort": "parti"}
+    )
+
+    # Keep only politicians we have info for
+    valid_ids = matrix.index.intersection(actors_map.index)
+    matrix = matrix.loc[valid_ids]
+    if len(matrix) < 2:
+        return pd.DataFrame()
+
+    # Normalise rows (L2) for cosine similarity
+    norms = np.linalg.norm(matrix.values, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    normed = matrix.values / norms
+
+    # Full cosine similarity matrix
+    sim_matrix = normed @ normed.T  # shape: (n_politicians, n_politicians)
+
+    ids = matrix.index.tolist()
+    rows = []
+    n = len(ids)
+    for i in range(n):
+        for j in range(i + 1, n):
+            id_a, id_b = ids[i], ids[j]
+            parti_a = actors_map.loc[id_a, "parti"] if id_a in actors_map.index else ""
+            parti_b = actors_map.loc[id_b, "parti"] if id_b in actors_map.index else ""
+            if parti_a == parti_b:
+                continue  # skip same-party pairs
+            rows.append({
+                "navn_a": actors_map.loc[id_a, "navn"],
+                "parti_a": parti_a,
+                "navn_b": actors_map.loc[id_b, "navn"],
+                "parti_b": parti_b,
+                "lighed": round(float(sim_matrix[i, j]), 3),
+            })
+
+    if not rows:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(rows).sort_values("lighed", ascending=False).head(top_n)
+    return result.reset_index(drop=True)
 
 
 def get_meetings_by_month(meetings_df: pd.DataFrame) -> pd.DataFrame:
