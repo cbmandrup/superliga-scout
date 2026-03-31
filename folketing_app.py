@@ -232,10 +232,12 @@ with st.sidebar:
         selected_periode_id = None
         selected_periode_label = "Alle"
     else:
+        # Only show proper parliamentary sessions — titles like "2024-25" or "2024-25 (1. samling)"
+        # Single-year entries ("2024", "2025") are calendar-year buckets, not sessions
         periode_options = {
             row["titel"]: row["id"]
             for _, row in periods_df.iterrows()
-            if pd.notna(row.get("titel"))
+            if pd.notna(row.get("titel")) and "-" in str(row.get("titel", ""))
         }
         selected_periode_label = st.selectbox(
             "Valgperiode / samling",
