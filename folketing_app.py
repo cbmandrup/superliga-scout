@@ -195,7 +195,18 @@ def load_votes(periode_id: int | None) -> pd.DataFrame:
     if IS_DEMO:
         return _load_demo(periode_id)["votes"]
     try:
-        return get_votes(periode_id=periode_id, max_records=5000)
+        # Look up start/end dates for the selected period
+        from_date, to_date = None, None
+        if periode_id is not None and not _probe.empty:
+            row = _probe[_probe["id"] == periode_id]
+            if not row.empty:
+                start = row["startdato"].iloc[0]
+                slut = row["slutdato"].iloc[0]
+                if pd.notna(start):
+                    from_date = str(start.date())
+                if pd.notna(slut):
+                    to_date = str(slut.date())
+        return get_votes(from_date=from_date, to_date=to_date, max_records=5000)
     except Exception:
         return _load_demo(periode_id)["votes"]
 
@@ -213,7 +224,17 @@ def load_individual_votes(periode_id: int | None) -> pd.DataFrame:
     if IS_DEMO:
         return _load_demo(periode_id)["individual_votes"]
     try:
-        return get_individual_votes(periode_id=periode_id, max_records=50000)
+        from_date, to_date = None, None
+        if periode_id is not None and not _probe.empty:
+            row = _probe[_probe["id"] == periode_id]
+            if not row.empty:
+                start = row["startdato"].iloc[0]
+                slut = row["slutdato"].iloc[0]
+                if pd.notna(start):
+                    from_date = str(start.date())
+                if pd.notna(slut):
+                    to_date = str(slut.date())
+        return get_individual_votes(from_date=from_date, to_date=to_date, max_records=50000)
     except Exception:
         return _load_demo(periode_id)["individual_votes"]
 

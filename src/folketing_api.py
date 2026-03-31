@@ -90,25 +90,34 @@ def get_meetings(periode_id: Optional[int] = None, max_records: int = 2000) -> p
     return df
 
 
-def get_votes(periode_id: Optional[int] = None, max_records: int = 5000) -> pd.DataFrame:
-    """Return votes (Afstemning), optionally filtered by parliamentary period.
+def get_votes(
+    periode_id: Optional[int] = None,
+    max_records: int = 5000,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """Return votes (Afstemning), optionally filtered by date range.
 
-    The ODA API is OData v3. Vote results are in the 'konklusion' field
-    (string: "Vedtaget" / "Forkastet") and optionally a boolean 'vedtaget'.
+    The ODA API is OData v3. Navigation-property filters like
+    møde/periode_id are unreliable — we filter by dato instead.
+
+    from_date / to_date: ISO date strings like "2022-10-01".
     """
     params: dict = {"$orderby": "id desc"}
-    if periode_id is not None:
-        params["$filter"] = f"m%C3%B8de/periode_id eq {periode_id}"
-        params["$expand"] = "m%C3%B8de"
+    filters = []
+    if from_date:
+        filters.append(f"dato gt datetime'{from_date}T00:00:00'")
+    if to_date:
+        filters.append(f"dato lt datetime'{to_date}T23:59:59'")
+    if filters:
+        params["$filter"] = " and ".join(filters)
     records = _paginate("Afstemning", params, max_records=max_records)
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
-    # Flatten nested møde info if expanded
     if "møde" in df.columns:
         moed_df = df["møde"].apply(pd.Series).add_prefix("møde_")
         df = pd.concat([df.drop(columns=["møde"]), moed_df], axis=1)
-    # Normalise result field — API may return 'konklusion' (string) or 'vedtaget' (bool)
     if "konklusion" in df.columns:
         df["vedtaget"] = df["konklusion"].str.strip().str.lower() == "vedtaget"
     elif "vedtaget" in df.columns:
@@ -132,17 +141,25 @@ def get_actors(typeid: int = 5) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def get_individual_votes(periode_id: Optional[int] = None, max_records: int = 50000) -> pd.DataFrame:
-    """Return individual politician votes (Stemme)."""
+def get_individual_votes(
+    periode_id: Optional[int] = None,
+    max_records: int = 50000,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """Return individual politician votes (Stemme), filtered by date range."""
     params: dict = {}
-    if periode_id is not None:
-        params["$filter"] = f"afstemning/m%C3%B8de/periode_id eq {periode_id}"
-        params["$expand"] = "afstemning($expand=m%C3%B8de)"
+    filters = []
+    if from_date:
+        filters.append(f"afstemning/dato gt datetime'{from_date}T00:00:00'")
+    if to_date:
+        filters.append(f"afstemning/dato lt datetime'{to_date}T23:59:59'")
+    if filters:
+        params["$filter"] = " and ".join(filters)
     records = _paginate("Stemme", params, max_records=max_records)
     if not records:
         return pd.DataFrame()
-    df = pd.DataFrame(records)
-    return df
+    return pd.DataFrame(records)
 
 
 def get_vote_summary(votes_df: pd.DataFrame) -> dict:
