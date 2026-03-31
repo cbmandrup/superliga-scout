@@ -3,6 +3,7 @@ Folketing Tracker — Streamlit dashboard for tracking Danish Parliament
 meetings (møder) and votes (afstemninger).
 
 Data source: Folketing Open Data API (ODA) — https://oda.ft.dk/api/
+Falls back to synthetic demo data automatically if the API is unreachable.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from src.folketing_api import (
     get_votes_by_month,
     FOLKETING_ANNUAL_SALARY_DKK,
 )
+from folketing_demo import get_demo_data
 
 # ─── Color palette (ft.dk inspired) ─────────────────────────────────────────
 TEAL = "#00686E"
@@ -145,38 +147,86 @@ st.markdown(
 
 # ─── Data loading (cached) ────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
+def _try_load_periods() -> pd.DataFrame:
+    """Try to load real periods; return empty DataFrame on failure."""
+    try:
+        df = get_periods()
+        return df if not df.empty else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_demo(periode_id: int | None) -> dict:
+    return get_demo_data(periode_id)
+
+
+# ─── Detect live vs demo mode ─────────────────────────────────────────────────
+_probe = _try_load_periods()
+IS_DEMO = _probe.empty
+
+if IS_DEMO:
+    st.warning(
+        "**Demo-tilstand** — Folketing API er ikke tilgængeligt. "
+        "Viser syntetiske data til demonstration.",
+        icon="ℹ️",
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_periods() -> pd.DataFrame:
-    return get_periods()
+    if IS_DEMO:
+        return _load_demo(None)["periods"]
+    return _probe
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def load_meetings(periode_id: int | None) -> pd.DataFrame:
-    return get_meetings(periode_id=periode_id, max_records=2000)
+    if IS_DEMO:
+        return _load_demo(periode_id)["meetings"]
+    try:
+        return get_meetings(periode_id=periode_id, max_records=2000)
+    except Exception:
+        return _load_demo(periode_id)["meetings"]
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def load_votes(periode_id: int | None) -> pd.DataFrame:
-    return get_votes(periode_id=periode_id, max_records=5000)
+    if IS_DEMO:
+        return _load_demo(periode_id)["votes"]
+    try:
+        return get_votes(periode_id=periode_id, max_records=5000)
+    except Exception:
+        return _load_demo(periode_id)["votes"]
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def load_actors() -> pd.DataFrame:
-    return get_actors(typeid=5)
+    if IS_DEMO:
+        return _load_demo(None)["actors"]
+    try:
+        return get_actors(typeid=5)
+    except Exception:
+        return _load_demo(None)["actors"]
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def load_individual_votes(periode_id: int | None) -> pd.DataFrame:
-    return get_individual_votes(periode_id=periode_id, max_records=50000)
+    if IS_DEMO:
+        return _load_demo(periode_id)["individual_votes"]
+    try:
+        return get_individual_votes(periode_id=periode_id, max_records=50000)
+    except Exception:
+        return _load_demo(periode_id)["individual_votes"]
 
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Filtrer data")
 
+    if IS_DEMO:
+        st.info("Demo-tilstand: viser syntetiske data (API ikke tilgængeligt)")
+
     periods_df = load_periods()
 
     if periods_df.empty:
-        st.error("Kunne ikke hente samlings-data fra Folketing API.")
+        st.error("Kunne ikke hente samlings-data.")
         selected_periode_id = None
         selected_periode_label = "Alle"
     else:
@@ -185,8 +235,6 @@ with st.sidebar:
             for _, row in periods_df.iterrows()
             if pd.notna(row.get("titel"))
         }
-        # Default to the most recent period
-        default_periode = list(periode_options.keys())[0] if periode_options else None
         selected_periode_label = st.selectbox(
             "Valgperiode / samling",
             options=list(periode_options.keys()),
@@ -195,11 +243,12 @@ with st.sidebar:
         selected_periode_id = periode_options.get(selected_periode_label)
 
     st.markdown("---")
-    st.markdown(
-        "<small style='color:#aaa'>Data: <a href='https://oda.ft.dk' "
-        "style='color:#6ec6c8'>Folketing Open Data</a></small>",
-        unsafe_allow_html=True,
-    )
+    if not IS_DEMO:
+        st.markdown(
+            "<small style='color:#aaa'>Data: <a href='https://oda.ft.dk' "
+            "style='color:#6ec6c8'>Folketing Open Data</a></small>",
+            unsafe_allow_html=True,
+        )
     st.markdown(
         f"<small style='color:#aaa'>Grundvederlag: {FOLKETING_ANNUAL_SALARY_DKK:,} DKK/år</small>",
         unsafe_allow_html=True,
@@ -207,7 +256,7 @@ with st.sidebar:
 
 
 # ─── Load data ────────────────────────────────────────────────────────────────
-with st.spinner("Henter data fra Folketing..."):
+with st.spinner("Henter data..." if not IS_DEMO else "Indlæser demo-data..."):
     meetings_df = load_meetings(selected_periode_id)
     votes_df = load_votes(selected_periode_id)
 
